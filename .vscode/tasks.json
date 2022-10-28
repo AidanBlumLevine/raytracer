@@ -1,0 +1,20 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🏃‍♂️ Run demo",
+            "command": "mkdir --parents build && cd build && cmake .. && make && ./tinyraytracer && pnmtopng out.ppm > out.png && open out.png && cd ..",
+            "windows": {
+                "command": "./mkdir --parents build && cd build && cmake .. && make && ./tinyraytracer && pnmtopng out.ppm > out.png && open out.png && cd .."
+            },
+            "args": [
+                "start"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
