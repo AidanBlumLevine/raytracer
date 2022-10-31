@@ -6,4 +6,4 @@ RUN apt-get update && apt-get install -y \
   netpbm \
   libsdl2-dev
 
-RUN "brew install cmake glibc gcc"
+RUN brew install cmake glibc gcc
