@@ -1,149 +1,152 @@
-#include <tuple>
-#include <vector>
-#include <fstream>
-#include <algorithm>
+#include <bits/stdint-uintn.h>
+#include <sys/types.h>
+
+#include <chrono>
 #include <cmath>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
 
-struct vec3 {
-    float x=0, y=0, z=0;
-          float& operator[](const int i)       { return i==0 ? x : (1==i ? y : z); }
-    const float& operator[](const int i) const { return i==0 ? x : (1==i ? y : z); }
-    vec3  operator*(const float v) const { return {x*v, y*v, z*v};       }
-    float operator*(const vec3& v) const { return x*v.x + y*v.y + z*v.z; }
-    vec3  operator+(const vec3& v) const { return {x+v.x, y+v.y, z+v.z}; }
-    vec3  operator-(const vec3& v) const { return {x-v.x, y-v.y, z-v.z}; }
-    vec3  operator-()              const { return {-x, -y, -z};          }
-    float norm() const { return std::sqrt(x*x+y*y+z*z); }
-    vec3 normalized() const { return (*this)*(1.f/norm()); }
+struct vec {
+  float x = 0;
+  float y = 0;
+  float z = 0;
+  float mag() const { return std::sqrt(x * x + y * y + z * z); }
+  float sqrmag() const { return x * x + y * y + z * z; }
+  vec operator*(const float v) const { return {x * v, y * v, z * v}; }
+  vec operator*(const vec &v) const { return {x * v.x, y * v.y, z * v.z}; }
+  vec operator+(const vec &v) const { return {x + v.x, y + v.y, z + v.z}; }
+  vec operator/(const float v) const { return {x / v, y / v, z / v}; }
+  vec operator/(const vec &v) const { return {x / v.x, y / v.y, z / v.z}; }
+  vec operator-(const vec &v) const { return {x - v.x, y - v.y, z - v.z}; }
+  vec operator-() const { return {-x, -y, -z}; }
+  vec normalized() const { return (*this) / mag(); }
+  float dot(const vec &v) const { return x * v.x + y * v.y + z * v.z; }
+  vec cross(const vec &v) const { return {y * v.z - z * v.y, z * v.x - x * v.z, x * v.y - y * v.x}; }
+  std::string str() const { return "("+std::to_string((*this).x)+", "+std::to_string((*this).y)+", "+std::to_string((*this).z)+")";}
 };
 
-vec3 cross(const vec3 v1, const vec3 v2) {
-    return { v1.y*v2.z - v1.z*v2.y, v1.z*v2.x - v1.x*v2.z, v1.x*v2.y - v1.y*v2.x };
-}
+uint32_t make_color(int r, int g, int b) { return r << 16 | g << 8 | b; }
+u_short color_red(uint32_t enc_color) { return enc_color >> 16; }
+u_short color_green(uint32_t enc_color) { return (enc_color >> 8) & 0xFF; }
+u_short color_blue(uint32_t enc_color) { return enc_color & 0xFF; }
 
-struct Material {
-    float refractive_index = 1;
-    float albedo[4] = {2,0,0,0};
-    vec3 diffuse_color = {0,0,0};
-    float specular_exponent = 0;
+struct intersection {
+  bool exists = false;
+  float distance;
+  vec point;
+  vec normal;
+  uint32_t color;
 };
 
-struct Sphere {
-    vec3 center;
-    float radius;
-    Material material;
+struct ray {
+  vec start;
+  vec norm_direction;
 };
 
-constexpr Material      ivory = {1.0, {0.9,  0.5, 0.1, 0.0}, {0.4, 0.4, 0.3},   50.};
-constexpr Material      glass = {1.5, {0.0,  0.9, 0.1, 0.8}, {0.6, 0.7, 0.8},  125.};
-constexpr Material red_rubber = {1.0, {1.4,  0.3, 0.0, 0.0}, {0.3, 0.1, 0.1},   10.};
-constexpr Material     mirror = {1.0, {0.0, 16.0, 0.8, 0.0}, {1.0, 1.0, 1.0}, 1425.};
-
-constexpr Sphere spheres[] = {
-    {{-3,    0,   -16}, 2,      ivory},
-    {{-1.0, -1.5, -12}, 2,      glass},
-    {{ 1.5, -0.5, -18}, 3, red_rubber},
-    {{ 7,    5,   -18}, 4,     mirror}
+class Object {
+ public:
+  vec pos;
+  uint32_t color;
+  virtual intersection ray_intersect(const ray &r) {
+    return intersection{false};
+  };
 };
 
-constexpr vec3 lights[] = {
-    {-20, 20,  20},
-    { 30, 50, -25},
-    { 30, 20,  30}
-};
+class Sphere : public Object {
+ public:
+  Sphere(float r, vec v, uint32_t color = 0xFFFFFF) {
+    (*this).radius = r;
+    (*this).pos = v;
+    (*this).color = color;
+  }
 
-vec3 reflect(const vec3 &I, const vec3 &N) {
-    return I - N*2.f*(I*N);
-}
-
-vec3 refract(const vec3 &I, const vec3 &N, const float eta_t, const float eta_i=1.f) { // Snell's law
-    float cosi = - std::max(-1.f, std::min(1.f, I*N));
-    if (cosi<0) return refract(I, -N, eta_i, eta_t); // if the ray comes from the inside the object, swap the air and the media
-    float eta = eta_i / eta_t;
-    float k = 1 - eta*eta*(1 - cosi*cosi);
-    return k<0 ? vec3{1,0,0} : I*eta + N*(eta*cosi - std::sqrt(k)); // k<0 = total reflection, no ray to refract. I refract it anyways, this has no physical meaning
-}
-
-std::tuple<bool,float> ray_sphere_intersect(const vec3 &orig, const vec3 &dir, const Sphere &s) { // ret value is a pair [intersection found, distance]
-    vec3 L = s.center - orig;
-    float tca = L*dir;
-    float d2 = L*L - tca*tca;
-    if (d2 > s.radius*s.radius) return {false, 0};
-    float thc = std::sqrt(s.radius*s.radius - d2);
-    float t0 = tca-thc, t1 = tca+thc;
-    if (t0>.001) return {true, t0};  // offset the original point by .001 to avoid occlusion by the object itself
-    if (t1>.001) return {true, t1};
-    return {false, 0};
-}
-
-std::tuple<bool,vec3,vec3,Material> scene_intersect(const vec3 &orig, const vec3 &dir) {
-    vec3 pt, N;
-    Material material;
-
-    float nearest_dist = 1e10;
-    if (std::abs(dir.y)>.001) { // intersect the ray with the checkerboard, avoid division by zero
-        float d = -(orig.y+4)/dir.y; // the checkerboard plane has equation y = -4
-        vec3 p = orig + dir*d;
-        if (d>.001 && d<nearest_dist && std::abs(p.x)<10 && p.z<-10 && p.z>-30) {
-            nearest_dist = d;
-            pt = p;
-            N = {0,1,0};
-            material.diffuse_color = (int(.5*pt.x+1000) + int(.5*pt.z)) & 1 ? vec3{.3, .3, .3} : vec3{.3, .2, .1};
-        }
+  float radius;
+  
+  intersection ray_intersect(const ray &r) override {
+    vec b = (*this).pos - r.start;
+    vec a = r.norm_direction;
+    vec proj = a * (a.dot(b) / a.sqrmag());
+    float sqdist = (b-proj).sqrmag();
+    if(sqdist < (*this).radius*(*this).radius){
+      float dist_to_center = proj.mag();
+      float dist_to_sphere = dist_to_center - std::sqrt((*this).radius * (*this).radius - sqdist);
+      vec point = a * dist_to_sphere;
+      vec normal = (point - b).normalized();
+      return intersection{true, dist_to_sphere, point, normal, (*this).color};
     }
+    return intersection{false};
+  }
+};
 
-    for (const Sphere &s : spheres) { // intersect the ray with all spheres
-        auto [intersection, d] = ray_sphere_intersect(orig, dir, s);
-        if (!intersection || d > nearest_dist) continue;
-        nearest_dist = d;
-        pt = orig + dir*nearest_dist;
-        N = (pt - s.center).normalized();
-        material = s.material;
+class Light : public Sphere {
+ public:
+  Light(float s, float r, vec v, uint32_t light_color = 0xFFFFFF) : Sphere(r, v, light_color) {
+    (*this).light_color = color;
+    (*this).strength = s;
+  }
+
+  uint32_t light_color;
+  float strength;
+};
+
+std::vector<Object*> objects;
+std::vector<Light> lights;
+
+uint32_t cast_ray(const ray &r) {
+  float closest = 99999;
+  uint32_t color = 0;
+  for (Object* obj : objects) {
+    intersection i = (*obj).ray_intersect(r);
+    if (i.exists && i.distance < closest) {
+      closest = i.distance;
+      color = i.color;
+      color = make_color((int)(i.normal.x * 125 + 125),(int)(i.normal.y * 125 + 125),(int)(i.normal.z * 125 + 125));
     }
-    return { nearest_dist<1000, pt, N, material };
-}
-
-vec3 cast_ray(const vec3 &orig, const vec3 &dir, const int depth=0) {
-    auto [hit, point, N, material] = scene_intersect(orig, dir);
-    if (depth>4 || !hit)
-        return {0.2, 0.7, 0.8}; // background color
-
-    vec3 reflect_dir = reflect(dir, N).normalized();
-    vec3 refract_dir = refract(dir, N, material.refractive_index).normalized();
-    vec3 reflect_color = cast_ray(point, reflect_dir, depth + 1);
-    vec3 refract_color = cast_ray(point, refract_dir, depth + 1);
-
-    float diffuse_light_intensity = 0, specular_light_intensity = 0;
-    for (const vec3 &light : lights) { // checking if the point lies in the shadow of the light
-        vec3 light_dir = (light - point).normalized();
-        auto [hit, shadow_pt, trashnrm, trashmat] = scene_intersect(point, light_dir);
-        if (hit && (shadow_pt-point).norm() < (light-point).norm()) continue;
-        diffuse_light_intensity  += std::max(0.f, light_dir*N);
-        specular_light_intensity += std::pow(std::max(0.f, -reflect(-light_dir, N)*dir), material.specular_exponent);
-    }
-    return material.diffuse_color * diffuse_light_intensity * material.albedo[0] + vec3{1., 1., 1.}*specular_light_intensity * material.albedo[1] + reflect_color*material.albedo[2] + refract_color*material.albedo[3];
+  }
+  return color;
 }
 
 int main() {
-    constexpr int   width  = 1024;
-    constexpr int   height = 768;
-    constexpr float fov    = 1.05; // 60 degrees field of view in radians
-    std::vector<vec3> framebuffer(width*height);
-#pragma omp parallel for
-    for (int pix = 0; pix<width*height; pix++) { // actual rendering loop
-        float dir_x =  (pix%width + 0.5) -  width/2.;
-        float dir_y = -(pix/width + 0.5) + height/2.; // this flips the image at the same time
-        float dir_z = -height/(2.*tan(fov/2.));
-        framebuffer[pix] = cast_ray(vec3{0,0,0}, vec3{dir_x, dir_y, dir_z}.normalized());
-    }
+  Sphere sp1 = Sphere(1.0f, vec{0, 0, 10});
+  Sphere* p1 = &sp1;
+  objects.push_back(p1);
+  Sphere sp2 = Sphere(1.0f, vec{0, 1, 10}, make_color(10,20,250));
+  Sphere* p2 = &sp2;
+  objects.push_back(p2);
 
-    std::ofstream ofs("./out.ppm", std::ios::binary);
-    ofs << "P6\n" << width << " " << height << "\n255\n";
-    for (vec3 &color : framebuffer) {
-        float max = std::max(1.f, std::max(color[0], std::max(color[1], color[2])));
-        for (int chan : {0,1,2})
-            ofs << (char)(255 *  color[chan]/max);
+  std::cout << (*p1).ray_intersect({{0,0,0},vec{0, -1, 0}.normalized()}).exists;
+
+  int start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  const int width = 1000;
+  const int height = 1000;
+  std::vector<uint32_t> img(width * height);
+
+  const float fov = 1.05;
+  const vec up = {0, 1, 0};
+  vec camera_pos = {0, 0, 0};
+  vec camera_fwd = {0, 0, (width / (2 * (float)tan(fov / 2.0)))};
+  vec camera_right = up.cross(camera_fwd).normalized();
+
+  for (int x = 0; x < width; ++x) {
+    for (int y = 0; y < height; ++y) {
+      //   img[x + y * width] = make_color((x) / 2, (400 - x) / 2, (y));
+      vec screen_loc = (camera_pos + camera_fwd) + (camera_right * (x - width / 2)) + (up * (height / 2 - y));
+        // std::cout << screen_loc.str();
+      img[x + y * width] = cast_ray(ray{camera_pos, (screen_loc - camera_pos).normalized()});
     }
-    return 0;
+  }
+
+  int end = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+  int time = end - start;
+  float fps = 1000 / std::max(1, time);
+
+  std::cout << "\nRendered in " + std::to_string(time) + "ms (" + std::to_string(fps) + " fps)\n\n";
+  std::ofstream ofs("./out.ppm", std::ios::binary);
+  ofs << "P6\n" << width << " " << height << "\n255\n";
+  for (uint32_t color : img) {
+    ofs << (char)color_red(color) << (char)color_green(color) << (char)color_blue(color);
+  }
+  return 0;
 }
-
