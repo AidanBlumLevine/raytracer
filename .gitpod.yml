@@ -1,6 +1,8 @@
 image:
   file: Dockerfile
 tasks:
+- init: >
+    brew install cmake glibc gcc
 - command: >
     mkdir --parents build &&
     cd build &&
