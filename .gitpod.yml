@@ -4,9 +4,9 @@ tasks:
 - command: >
     mkdir --parents build &&
     cd build &&
-    cmake .. &&
+    cmake ..
+- command: >
     make &&
     ./tinyraytracer &&
     pnmtopng out.ppm > out.png &&
-    open out.png &&
-    cd ..
+    open out.png
