@@ -3,7 +3,7 @@ image:
 tasks:
 - init: >
     brew install cmake glibc gcc
-- command: >
+- before: >
     mkdir --parents build &&
     cd build &&
     cmake ..
